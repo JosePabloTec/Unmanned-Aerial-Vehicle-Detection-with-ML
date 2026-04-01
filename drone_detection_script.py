@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch.nn as nn
 import torchvision.ops as ops
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 
@@ -129,7 +130,9 @@ class UAVNet(nn.Module):
 # IoU Loss
 # -----------------------------
 
-def bbox_iou_loss(pred,target):
+def bbox_ciou_loss(pred, target):
+
+    # convert [x,y,w,h] → [x1,y1,x2,y2]
 
     pred_xyxy = torch.zeros_like(pred)
     target_xyxy = torch.zeros_like(target)
@@ -144,10 +147,21 @@ def bbox_iou_loss(pred,target):
     target_xyxy[:,2] = target[:,0] + target[:,2]/2
     target_xyxy[:,3] = target[:,1] + target[:,3]/2
 
-    iou = ops.box_iou(pred_xyxy,target_xyxy).diag()
+    # CIoU loss
+    ciou = ops.complete_box_iou(pred_xyxy, target_xyxy).diag()
+    ciou_loss = (1 - ciou).mean()
 
-    return (1 - iou).mean()
+    # L1 regression tightening
+    l1_loss = F.l1_loss(pred, target)
 
+    # width/height penalty
+    size_penalty = ((pred[:,2]-target[:,2])**2 +
+                    (pred[:,3]-target[:,3])**2).mean()
+
+    # combined loss
+    loss = ciou_loss + 0.5*l1_loss + 2*size_penalty
+
+    return loss
 
 # -----------------------------
 # Training
@@ -183,9 +197,9 @@ for epoch in range(30):
 
         loss_cls = cls_loss_fn(pred_cls,cls)
 
-        loss_bbox = bbox_iou_loss(pred_bbox,bbox)
+        loss_bbox = bbox_ciou_loss(pred_bbox, bbox)
 
-        loss = loss_cls + 5*loss_bbox
+        loss = loss_cls + 10*loss_bbox
 
         optimizer.zero_grad()
         loss.backward()
